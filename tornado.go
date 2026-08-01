@@ -137,13 +137,17 @@ func getProxy() string {
 
 // ==================== JA3 SPOOF ====================
 func randomCipherSuites() []uint16 {
-	all := tls.CipherSuites()
+	all := tls.CipherSuites() // []*tls.CipherSuite
 	rand.Shuffle(len(all), func(i, j int) { all[i], all[j] = all[j], all[i] })
-	// Ambil 10 pertama secara acak
-	if len(all) > 10 {
-		return all[:10]
+	count := 10
+	if len(all) < count {
+		count = len(all)
 	}
-	return all
+	ids := make([]uint16, count)
+	for i := 0; i < count; i++ {
+		ids[i] = all[i].ID
+	}
+	return ids
 }
 
 func newTLSConfig() *tls.Config {
@@ -554,7 +558,6 @@ func main() {
 		fmt.Println("\n[+] Durasi selesai.")
 	case <-sigChan:
 		fmt.Println("\n[!] Dihentikan oleh pengguna.")
-		// Kirim sinyal stop ke Redis jika ada
 		if enableRedis && rdb != nil {
 			rdb.Publish(ctx, "tornado_control", "STOP")
 		}
@@ -567,9 +570,9 @@ func main() {
 	total := atomic.LoadUint64(&stats.total)
 	success := atomic.LoadUint64(&stats.success)
 	failed := atomic.LoadUint64(&stats.failed)
-	fmt.Println("\n" + "="*50)
+	fmt.Println("\n" + strings.Repeat("=", 50))
 	fmt.Println("             TORNADO – SELESAI")
-	fmt.Println("="*50)
+	fmt.Println(strings.Repeat("=", 50))
 	fmt.Printf("Total request   : %d\n", total)
 	fmt.Printf("Sukses (2xx-3xx) : %d\n", success)
 	fmt.Printf("Gagal           : %d\n", failed)
