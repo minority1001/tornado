@@ -675,7 +675,7 @@ func main() {
 	failed := atomic.LoadUint64(&stats.failed)
 	fmt.Println("\n" + strings.Repeat("=", 40))
 	fmt.Println("             TORNADO  REPORT")
-	fmt.Println(strings.Repeat("=", 50))
+	fmt.Println(strings.Repeat("=", 40))
 	fmt.Printf("Total request   : %d\n", total)
 	fmt.Printf("Success (2xx-3xx) : %d\n", success)
 	fmt.Printf("Failed           : %d\n", failed)
