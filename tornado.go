@@ -475,13 +475,13 @@ func statsPrinter() {
 
 			width := getTerminalWidth()
 			// Bangun string statistik tanpa ANSI untuk dihitung panjangnya
-			raw := fmt.Sprintf("🌪 Total: %d | Sukses: %d | Gagal: %d | Rate: %d req/s", total, success, failed, rate)
+			raw := fmt.Sprintf("🌪🌪🌪 Total: %d | Sukses: %d | Gagal: %d | Rate: %d req/s", total, success, failed, rate)
 			clean := stripANSI(raw)
 			cleanLen := len(clean)
 
 			if cleanLen <= width {
 				// Muat dalam satu baris
-				fmt.Printf("\r\033[93m🌪 Total: \033[97m%d \033[93m| Sukses: \033[92m%d \033[93m| Gagal: \033[91m%d \033[93m| Rate: \033[97m%d req/s\033[0m",
+				fmt.Printf("\r\033[93m🌪🌪🌪 Total: \033[97m%d \033[93m| Sukses: \033[92m%d \033[93m| Gagal: \033[91m%d \033[93m| Rate: \033[97m%d req/s\033[0m",
 					total, success, failed, rate)
 			} else {
 				// Tidak muat → cetak dalam 2 baris
@@ -495,7 +495,7 @@ func statsPrinter() {
 					line2 = truncateText(line2, maxLineWidth)
 				}
 				fmt.Printf("\r\033[K")
-				fmt.Printf("\033[93m🌪\033[0m\n")
+				fmt.Printf("\033[93m🌪🌪🌪\033[0m\n")
 				fmt.Printf("%s\n", line1)
 				fmt.Printf("%s", line2)
 			}
@@ -548,7 +548,7 @@ func main() {
 	flag.BoolVar(&enableDeepJSON, "deepjson", false, "Deep nested JSON payload")
 	flag.BoolVar(&enableSlowloris, "slowloris", false, "Slowloris attack")
 	flag.BoolVar(&enableRUDY, "rudy", false, "RUDY attack (large POST)")
-	flag.BoolVar(&attackAll, "all", false, "AKTIFKAN SEMUA FITUR (brutal)")
+	flag.BoolVar(&attackAll, "all", false, "AKTIFKAN SEMUA FITUR")
 	flag.BoolVar(&verbose, "v", false, "Verbose output")
 	flag.Parse()
 
