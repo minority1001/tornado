@@ -475,13 +475,13 @@ func statsPrinter() {
 
 			width := getTerminalWidth()
 			// Bangun string statistik tanpa ANSI untuk dihitung panjangnya
-			raw := fmt.Sprintf("🌪🌪🌪 Total: %d | Sukses: %d | Gagal: %d | Rate: %d req/s", total, success, failed, rate)
+			raw := fmt.Sprintf(" 🌪 Total: %d | Sukses: %d | Gagal: %d | Rate: %d req/s", total, success, failed, rate)
 			clean := stripANSI(raw)
 			cleanLen := len(clean)
 
 			if cleanLen <= width {
 				// Muat dalam satu baris
-				fmt.Printf("\r\033[93m🌪🌪🌪 Total: \033[97m%d \033[93m| Sukses: \033[92m%d \033[93m| Gagal: \033[91m%d \033[93m| Rate: \033[97m%d req/s\033[0m",
+				fmt.Printf("\r\033[93m 🌪 Total: \033[97m%d \033[93m| Sukses: \033[92m%d \033[93m| Gagal: \033[91m%d \033[93m| Rate: \033[97m%d req/s\033[0m",
 					total, success, failed, rate)
 			} else {
 				// Tidak muat → cetak dalam 2 baris
@@ -495,7 +495,7 @@ func statsPrinter() {
 					line2 = truncateText(line2, maxLineWidth)
 				}
 				fmt.Printf("\r\033[K")
-				fmt.Printf("\033[93m🌪🌪🌪\033[0m\n")
+				fmt.Printf("\033[93m 🌪\033[0m\n")
 				fmt.Printf("%s\n", line1)
 				fmt.Printf("%s", line2)
 			}
@@ -559,7 +559,7 @@ func main() {
 	}
 
 	if attackAll {
-		fmt.Println("[⚛️] ALL MODE AKTIF – Semua fitur dinyalakan!")
+		fmt.Println("💣 ALL MODE AKTIF – Semua fitur dinyalakan!")
 		enableHTTP2 = true
 		enableProxy = true
 		enableUDP = true
@@ -620,13 +620,13 @@ func main() {
 	stopChan = make(chan struct{})
 
 	// ==================== START ATTACK ====================
-	fmt.Printf("\n[+] Tornado menghantam %s\n", targetURL)
-	fmt.Printf("[+] Workers: %d, Duration: %ds\n", workers, duration)
-	fmt.Printf("[+] Methods: %v\n", methodList)
-	fmt.Printf("[+] HTTP/2: %v, Proxy: %v, Tor: %v\n", enableHTTP2, enableProxy, enableTor)
-	fmt.Printf("[+] UDP: %v, TCP: %v, Slowloris: %v\n", enableUDP, enableTCP, enableSlowloris)
-	fmt.Printf("[+] Gzip Bomb: %v, Deep JSON: %v, RUDY: %v\n", enableGzip, enableDeepJSON, enableRUDY)
-	fmt.Printf("[+] Spoofing: %v, JA3: %v, Redis: %v\n", enableSpoof, enableJA3, enableRedis)
+	fmt.Printf("\n[🌪] Tornado menghantam %s\n", targetURL)
+	fmt.Printf("[🧨] Workers: %d, Duration: %ds\n", workers, duration)
+	fmt.Printf("[⚙️] Methods: %v\n", methodList)
+	fmt.Printf("[🚀] HTTP/2: %v, Proxy: %v, Tor: %v\n", enableHTTP2, enableProxy, enableTor)
+	fmt.Printf("[☄️] UDP: %v, TCP: %v, Slowloris: %v\n", enableUDP, enableTCP, enableSlowloris)
+	fmt.Printf("[💣] Gzip Bomb: %v, Deep JSON: %v, RUDY: %v\n", enableGzip, enableDeepJSON, enableRUDY)
+	fmt.Printf("[🎆] Spoofing: %v, JA3: %v, Redis: %v\n", enableSpoof, enableJA3, enableRedis)
 	
 
 	// UDP/TCP/Slowloris background
