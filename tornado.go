@@ -620,14 +620,14 @@ func main() {
 	stopChan = make(chan struct{})
 
 	// ==================== START ATTACK ====================
-	fmt.Printf("\n[+] TORNADO – Menyerang %s\n", targetURL)
+	fmt.Printf("\n[+] Tornado menghantam %s\n", targetURL)
 	fmt.Printf("[+] Workers: %d, Duration: %ds\n", workers, duration)
 	fmt.Printf("[+] Methods: %v\n", methodList)
 	fmt.Printf("[+] HTTP/2: %v, Proxy: %v, Tor: %v\n", enableHTTP2, enableProxy, enableTor)
 	fmt.Printf("[+] UDP: %v, TCP: %v, Slowloris: %v\n", enableUDP, enableTCP, enableSlowloris)
 	fmt.Printf("[+] Gzip Bomb: %v, Deep JSON: %v, RUDY: %v\n", enableGzip, enableDeepJSON, enableRUDY)
 	fmt.Printf("[+] Spoofing: %v, JA3: %v, Redis: %v\n", enableSpoof, enableJA3, enableRedis)
-	fmt.Println("[+] Tekan Ctrl+C untuk berhenti\n")
+	
 
 	// UDP/TCP/Slowloris background
 	if enableUDP {
@@ -658,7 +658,7 @@ func main() {
 
 	select {
 	case <-time.After(time.Duration(duration) * time.Second):
-		fmt.Println("\n[+] Durasi selesai.")
+		fmt.Println("\n[+] Attack selesai.")
 	case <-sigChan:
 		fmt.Println("\n[!] Dihentikan oleh pengguna.")
 		if enableRedis && rdb != nil {
@@ -673,11 +673,11 @@ func main() {
 	total := atomic.LoadUint64(&stats.total)
 	success := atomic.LoadUint64(&stats.success)
 	failed := atomic.LoadUint64(&stats.failed)
-	fmt.Println("\n" + strings.Repeat("=", 50))
-	fmt.Println("             TORNADO – SELESAI")
+	fmt.Println("\n" + strings.Repeat("=", 40))
+	fmt.Println("             TORNADO  REPORT")
 	fmt.Println(strings.Repeat("=", 50))
 	fmt.Printf("Total request   : %d\n", total)
-	fmt.Printf("Sukses (2xx-3xx) : %d\n", success)
-	fmt.Printf("Gagal           : %d\n", failed)
+	fmt.Printf("Success (2xx-3xx) : %d\n", success)
+	fmt.Printf("Failed           : %d\n", failed)
 	fmt.Printf("Success rate    : %.1f%%\n", float64(success)/float64(total)*100)
 }
