@@ -643,7 +643,7 @@ func main() {
 		go redisListener()
 	}
 
-	// Stats printer (ADAPTIF dengan 🌪)
+	// Stats printer (ADAPTIF dengan 🌪🌪🌪)
 	go statsPrinter()
 
 	// HTTP Workers
